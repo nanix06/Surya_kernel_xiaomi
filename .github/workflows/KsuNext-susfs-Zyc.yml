@@ -226,68 +226,116 @@ jobs:
 
           BOOT_OUT=release/boot-surya-KSUNext.img
 
-          # Repack du boot : on garde header, ramdisk, cmdline et os_version,
-          # on ne remplace QUE la section kernel (header v3/v4).
+          # Repack du boot : on remplace uniquement le kernel en conservant les autres sections
+          # (support header v0-v2 et v3-v4).
           python3 - stock-boot.img out/arch/arm64/boot/Image "$BOOT_OUT" <<'PY'
           import hashlib, struct, sys
 
           src, kpath, dst = sys.argv[1], sys.argv[2], sys.argv[3]
-          PAGE = 4096
 
-          def align(n):
-              return (n + PAGE - 1) // PAGE * PAGE
+          def pad(data, page):
+              return data + b"\0" * ((-len(data)) % page)
+
+          def u32(b, off):
+              return struct.unpack_from("<I", b, off)[0]
 
           img = open(src, "rb").read()
           if img[:8] != b"ANDROID!":
               sys.exit("boot stock: magic ANDROID! absent")
 
-          hv  = struct.unpack_from("<I", img, 40)[0]
-          hsz = struct.unpack_from("<I", img, 20)[0]
-          ks  = struct.unpack_from("<I", img, 8)[0]
-          rs  = struct.unpack_from("<I", img, 12)[0]
-          osv = struct.unpack_from("<I", img, 16)[0]
-
-          if hv not in (3, 4):
-              sys.exit("header_version %d non gere (attendu 3 ou 4)" % hv)
-
-          ram_off = PAGE + align(ks)
-          if ram_off + rs > len(img):
-              sys.exit("ramdisk hors image: header incoherent")
-
-          ramdisk = img[ram_off:ram_off + rs]
+          page = u32(img, 36) or 4096
+          hv = u32(img, 40)
           kern = open(kpath, "rb").read()
 
-          if img[PAGE + 0x38:PAGE + 0x3C] != b"ARM\x64":
-              print("ATTENTION: le noyau stock n'est pas une Image arm64")
-          if kern[0x38:0x3C] != b"ARM\x64":
-              sys.exit("le noyau fourni n'est pas une Image arm64")
+          if hv <= 2:
+              ks = u32(img, 8); rs = u32(img, 16); ss = u32(img, 24)
+              dtbo_s = u32(img, 1632) if hv >= 1 else 0
+              dtb_s = u32(img, 1644) if hv >= 2 else 0
+              hsz = u32(img, 1640) if hv >= 2 else (1632 if hv == 1 else 608)
+              osv = u32(img, 44)
 
-          hdr = bytearray(img[:PAGE])
-          struct.pack_into("<I", hdr, 8, len(kern))        # kernel_size
-          struct.pack_into("<I", hdr, 12, len(ramdisk))    # ramdisk_size
-          if hv == 4:
-              struct.pack_into("<I", hdr, 1580, 0)         # signature_size = 0
+              n = page
+              k_off = n; n += ( (ks + page - 1)//page ) * page
+              r_off = n; n += ( (rs + page - 1)//page ) * page
+              s_off = n; n += ( (ss + page - 1)//page ) * page
+              rec_off = n; n += ( (dtbo_s + page - 1)//page ) * page if hv >= 1 else 0
+              dtb_off = n
 
-          new_ram_off = PAGE + align(len(kern))
-          out = bytes(hdr) + kern + b"\0" * (new_ram_off - PAGE - len(kern))
-          out += ramdisk + b"\0" * (align(len(ramdisk)) - len(ramdisk))
-          open(dst, "wb").write(out)
+              ramdisk = img[r_off:r_off+rs]
+              second = img[s_off:s_off+ss]
+              rec = img[rec_off:rec_off+dtbo_s] if hv >= 1 else b""
+              dtb = img[dtb_off:dtb_off+dtb_s] if hv >= 2 else b""
 
-          # relecture pour verifier que rien n'a bouge a part le noyau
-          chk = open(dst, "rb").read()
-          nks = struct.unpack_from("<I", chk, 8)[0]
-          nrs = struct.unpack_from("<I", chk, 12)[0]
-          nro = PAGE + align(nks)
-          assert chk[:8] == b"ANDROID!" and chk[PAGE:PAGE + nks] == kern
-          assert chk[nro:nro + nrs] == ramdisk and len(chk) % PAGE == 0
-          assert chk[16:20] == img[16:20] and chk[44:1580] == img[44:1580]
+              if img[k_off + 0x38:k_off + 0x3C] != b"ARM\x64":
+                  print("ATTENTION: le noyau stock n'est pas une Image arm64")
+              if kern[0x38:0x3C] != b"ARM\x64":
+                  sys.exit("le noyau fourni n'est pas une Image arm64")
 
-          print("header   : v%d (header_size=%d)  os_version=0x%08x" % (hv, hsz, osv))
-          print("noyau    : %d o (stock %d o)" % (len(kern), ks))
-          print("ramdisk  : %d o a l'offset 0x%x (inchange)" % (nrs, nro))
-          print("image    : %d o (%.2f MiB)" % (len(chk), len(chk) / 1048576.0))
-          print("sha256   : " + hashlib.sha256(chk).hexdigest())
-          print("OK: ramdisk / cmdline / os_version identiques au stock")
+              hdr = bytearray(img[:page])
+              struct.pack_into("<I", hdr, 8, len(kern))
+              struct.pack_into("<I", hdr, 16, len(ramdisk))
+              struct.pack_into("<I", hdr, 24, len(second))
+              if hv >= 1:
+                  struct.pack_into("<I", hdr, 1632, len(rec))
+              if hv >= 2:
+                  struct.pack_into("<I", hdr, 1644, len(dtb))
+
+              out = bytes(hdr)
+              out += pad(kern, page)
+              out += pad(ramdisk, page)
+              out += pad(second, page)
+              if hv >= 1:
+                  out += pad(rec, page)
+              if hv >= 2:
+                  out += pad(dtb, page)
+
+              open(dst, "wb").write(out)
+              chk = open(dst, "rb").read()
+              nks = u32(chk, 8)
+              assert chk[:8] == b"ANDROID!" and u32(chk, 40) == hv
+              assert chk[page:page+nks] == kern
+              print("header   : v%d (header_size=%d, page=%d)  os_version=0x%08x" % (hv, hsz, page, osv))
+              print("noyau    : %d o (stock %d o)" % (len(kern), ks))
+              print("ramdisk  : %d o | second: %d o | recovery_dtbo: %d o | dtb: %d o" % (len(ramdisk), len(second), len(rec), len(dtb)))
+              print("image    : %d o (%.2f MiB)" % (len(chk), len(chk) / 1048576.0))
+              print("sha256   : " + hashlib.sha256(chk).hexdigest())
+              print("OK: sections hors kernel conservees")
+
+          elif hv in (3, 4):
+              hsz = u32(img, 20); ks = u32(img, 8); rs = u32(img, 12); osv = u32(img, 16)
+              ram_off = page + ((ks + page - 1)//page)*page
+              if ram_off + rs > len(img):
+                  sys.exit("ramdisk hors image: header incoherent")
+              ramdisk = img[ram_off:ram_off + rs]
+
+              if img[page + 0x38:page + 0x3C] != b"ARM\x64":
+                  print("ATTENTION: le noyau stock n'est pas une Image arm64")
+              if kern[0x38:0x3C] != b"ARM\x64":
+                  sys.exit("le noyau fourni n'est pas une Image arm64")
+
+              hdr = bytearray(img[:page])
+              struct.pack_into("<I", hdr, 8, len(kern))
+              struct.pack_into("<I", hdr, 12, len(ramdisk))
+              if hv == 4:
+                  struct.pack_into("<I", hdr, 1580, 0)  # signature_size = 0
+
+              new_ram_off = page + ((len(kern) + page - 1)//page)*page
+              out = bytes(hdr) + kern + b"\0" * (new_ram_off - page - len(kern))
+              out += ramdisk + b"\0" * ((-len(ramdisk)) % page)
+              open(dst, "wb").write(out)
+
+              chk = open(dst, "rb").read()
+              nks = u32(chk, 8); nrs = u32(chk, 12); nro = page + ((nks + page - 1)//page)*page
+              assert chk[:8] == b"ANDROID!" and chk[page:page+nks] == kern
+              assert chk[nro:nro+nrs] == ramdisk and len(chk) % page == 0
+              print("header   : v%d (header_size=%d, page=%d)  os_version=0x%08x" % (hv, hsz, page, osv))
+              print("noyau    : %d o (stock %d o)" % (len(kern), ks))
+              print("ramdisk  : %d o a l'offset 0x%x (inchange)" % (nrs, nro))
+              print("image    : %d o (%.2f MiB)" % (len(chk), len(chk) / 1048576.0))
+              print("sha256   : " + hashlib.sha256(chk).hexdigest())
+              print("OK: ramdisk / cmdline / os_version identiques au stock")
+          else:
+              sys.exit("header_version %d non gere" % hv)
           PY
 
           cd release
