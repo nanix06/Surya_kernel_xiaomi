@@ -14,7 +14,7 @@ permissions:
 env:
   ARCH: arm64
   SUBARCH: arm64
-  DEFCONFIG: vendor/atoll-perf_defconfig
+  DEFCONFIG: vendor/surya
   CROSS_COMPILE: aarch64-linux-gnu-
   CROSS_COMPILE_ARM32: arm-linux-gnueabi-
   CROSS_COMPILE_COMPAT: arm-linux-gnueabi-
@@ -104,41 +104,12 @@ jobs:
         run: |
           git clone --depth=1 -b legacy https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU
           ln -s ../KernelSU/kernel drivers/kernelsu
+
+          # Fix 4.14 monotonic boottime API in sulog
           sed -i 's/get_monotonic_boottime(&ts)/get_monotonic_boottime64(\&ts)/' KernelSU/kernel/sulog/event.c
           sed -i '/#include <linux\/uaccess.h>/a #include <linux/timekeeping.h>' KernelSU/kernel/sulog/event.c
 
-          bash patches/Patches/Fix/fix_sepolicy_mojito.sh KernelSU
-
-          printf '%s\n' \
-            '#define KSU_TYPE_VAL_TO_STRUCT' \
-            '#include "ss/avtab.h"' \
-            '#include "ss/constraint.h"' \
-            '#include "ss/ebitmap.h"' \
-            '#include "ss/hashtab.h"' \
-            '#include "ss/policydb.h"' \
-            '#include "ss/services.h"' \
-            '#include "ss/symtab.h"' \
-            '#include <linux/gfp.h>' \
-            '#include <linux/kernel.h>' \
-            '#include <linux/printk.h>' \
-            '#include <linux/slab.h>' \
-            '#include <linux/stddef.h>' \
-            '#include <linux/string.h>' \
-            '#include <linux/types.h>' \
-            '#include <linux/version.h>' \
-            '#include <linux/vmalloc.h>' \
-            | cat - KernelSU/kernel/selinux/sepolicy.c > /tmp/sepolicy.c.net \
-            && mv /tmp/sepolicy.c.net KernelSU/kernel/selinux/sepolicy.c
-
-          # KernelSU-Next legacy appelle ksu_policydb_fixup_len(), absent du sepolicy.c backslashxx
-          cat >> KernelSU/kernel/selinux/sepolicy.c <<'EOF'
-
-          int ksu_policydb_fixup_len(struct policydb *db, const char *tag)
-          {
-              return 0;
-          }
-          EOF
-
+          # Apply SuSFS patch for KernelSU-Next legacy (keep upstream sepolicy.c for flex_array policydb compat)
           cp patches/Patches/SuSFS_Ksu/susfs_patch_ksunext.patch KernelSU/
           cd KernelSU
           patch -p1 < susfs_patch_ksunext.patch || true
