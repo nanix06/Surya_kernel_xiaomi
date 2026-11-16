@@ -265,16 +265,16 @@ jobs:
           if hv <= 2:
               ks = u32(img, 8); rs = u32(img, 16); ss = u32(img, 24)
               dtbo_s = u32(img, 1632) if hv >= 1 else 0
+              dtbo_off = struct.unpack_from("<Q", img, 1636)[0] if hv >= 1 else 0
               dtb_s = u32(img, 1644) if hv >= 2 else 0
               hsz = u32(img, 1640) if hv >= 2 else (1632 if hv == 1 else 608)
               osv = u32(img, 44)
 
-              n = page
-              k_off = n; n += ((ks + page - 1)//page) * page
-              r_off = n; n += ((rs + page - 1)//page) * page
-              s_off = n; n += ((ss + page - 1)//page) * page
-              rec_off = n; n += ((dtbo_s + page - 1)//page) * page if hv >= 1 else 0
-              dtb_off = n
+              k_off = page
+              r_off = k_off + ((ks + page - 1)//page) * page
+              s_off = r_off + ((rs + page - 1)//page) * page
+              rec_off = dtbo_off if (hv >= 1 and dtbo_s > 0 and dtbo_off > 0) else s_off + ((ss + page - 1)//page) * page
+              dtb_off = rec_off + (((dtbo_s + page - 1)//page) * page if hv >= 1 else 0)
 
               stock_kern = img[k_off:k_off+ks]
               kpath, kname = pick_kernel(stock_kern, outdir)
@@ -284,6 +284,12 @@ jobs:
               second = img[s_off:s_off+ss]
               rec = img[rec_off:rec_off+dtbo_s] if hv >= 1 else b""
               dtb = img[dtb_off:dtb_off+dtb_s] if hv >= 2 else b""
+              orig_end = max(k_off+((ks+page-1)//page)*page,
+                             r_off+((rs+page-1)//page)*page,
+                             s_off+((ss+page-1)//page)*page,
+                             rec_off+((dtbo_s+page-1)//page)*page if hv >= 1 else 0,
+                             dtb_off+((dtb_s+page-1)//page)*page if hv >= 2 else 0)
+              tail = img[orig_end:]
 
               hdr = bytearray(img[:page])
               struct.pack_into("<I", hdr, 8, len(kern))
@@ -291,6 +297,9 @@ jobs:
               struct.pack_into("<I", hdr, 24, len(second))
               if hv >= 1:
                   struct.pack_into("<I", hdr, 1632, len(rec))
+                  # keep recovery_dtbo_offset layout consistent by rebuilding sequentially
+                  new_rec_off = page + ((len(kern)+page-1)//page)*page + ((len(ramdisk)+page-1)//page)*page + ((len(second)+page-1)//page)*page
+                  struct.pack_into("<Q", hdr, 1636, new_rec_off if len(rec) else 0)
               if hv >= 2:
                   struct.pack_into("<I", hdr, 1644, len(dtb))
 
@@ -302,13 +311,14 @@ jobs:
                   out += pad(rec, page)
               if hv >= 2:
                   out += pad(dtb, page)
+              out += tail
 
               open(dst, "wb").write(out)
               chk = open(dst, "rb").read()
               assert chk[:8] == b"ANDROID!" and u32(chk, 40) == hv and chk[page:page+len(kern)] == kern
               print("header   : v%d (header_size=%d, page=%d)  os_version=0x%08x" % (hv, hsz, page, osv))
               print("noyau    : %s %d o (stock %d o)" % (kname, len(kern), ks))
-              print("ramdisk  : %d o | second: %d o | recovery_dtbo: %d o | dtb: %d o" % (len(ramdisk), len(second), len(rec), len(dtb)))
+              print("ramdisk  : %d o | second: %d o | recovery_dtbo: %d o | dtb: %d o | tail: %d o" % (len(ramdisk), len(second), len(rec), len(dtb), len(tail)))
               print("image    : %d o (%.2f MiB)" % (len(chk), len(chk) / 1048576.0))
               print("sha256   : " + hashlib.sha256(chk).hexdigest())
 
