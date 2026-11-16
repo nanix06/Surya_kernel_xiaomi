@@ -117,6 +117,12 @@ jobs:
 
       - name: Configurer le noyau
         run: |
+          # Évite l'échec de compilation du dtbo overlay surya (labels externes non résolus)
+          if [ -f arch/arm64/boot/dts/qcom/Makefile ]; then
+            sed -i 's|^dtbo-$(CONFIG_MACH_XIAOMI_SURYA) += surya-sdmmagpie-overlay.dtbo|# &|' arch/arm64/boot/dts/qcom/Makefile
+            sed -i 's|^surya-sdmmagpie-overlay.dtbo-base := surya-sdmmagpie.dtb|# &|' arch/arm64/boot/dts/qcom/Makefile
+          fi
+
           mkdir -p out
 
           # Le repo fournit vendor/surya.config (fragment) mais pas vendor/surya_defconfig.
