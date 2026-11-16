@@ -142,7 +142,7 @@ jobs:
           cp patches/Patches/SuSFS_Ksu/susfs_patch_ksunext.patch KernelSU/
           cd KernelSU
           patch -p1 < susfs_patch_ksunext.patch || true
-          cd ...
+          cd ..
 
       - name: Configurer le noyau
         run: |
