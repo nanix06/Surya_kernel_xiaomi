@@ -1,4 +1,4 @@
-name: Mojito - WestCoast-KSUNext-susfs
+name: Surya-KSUNext-susfs
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ permissions:
 env:
   ARCH: arm64
   SUBARCH: arm64
-  DEFCONFIG: mojito_defconfig
+  DEFCONFIG: vendor/surya
   CROSS_COMPILE: aarch64-linux-gnu-
   CROSS_COMPILE_ARM32: arm-linux-gnueabi-
   CROSS_COMPILE_COMPAT: arm-linux-gnueabi-
@@ -28,7 +28,7 @@ jobs:
       - name: Télécharger le source
         uses: actions/checkout@v4
         with:
-          ref: personal
+          ref: seventeen
           fetch-depth: 1
           submodules: recursive
 
@@ -251,6 +251,6 @@ jobs:
       - name: Envoyer l’artefact
         uses: actions/upload-artifact@v4
         with:
-          name: Mojito-strix-KernelSU
+          name: Surya-KernelSUNext
           path: release/
           if-no-files-found: error
