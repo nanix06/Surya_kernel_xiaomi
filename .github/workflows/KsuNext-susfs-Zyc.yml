@@ -232,11 +232,12 @@ jobs:
               base = os.path.join(outdir, "arch/arm64/boot")
               cand = []
               if stock_kern[:2] == b"\x1f\x8b":
-                  cand = ["Image.gz-dtb", "Image.gz", "Image"]
+                  # prefer plain gzip if available (often smaller than -dtb) unless dtb is appended in stock
+                  cand = ["Image.gz", "Image.gz-dtb", "Image"]
               elif stock_kern[0x38:0x3C] == b"ARM\x64":
                   cand = ["Image", "Image.gz-dtb", "Image.gz"]
               else:
-                  cand = ["Image.gz-dtb", "Image.gz", "Image"]
+                  cand = ["Image.gz", "Image.gz-dtb", "Image"]
               for name in cand:
                   p = os.path.join(base, name)
                   if os.path.exists(p):
@@ -301,6 +302,16 @@ jobs:
                   out += pad(dtb, page)
               out += tail
 
+              if len(out) > len(img):
+                  delta = len(out) - len(img)
+                  sys.exit(
+                      "boot repack trop grand: %d o (stock %d o, +%d o). "
+                      "Kernel compile plus gros que le stock; reduire la taille du noyau ou libérer de l'espace."
+                      % (len(out), len(img), delta)
+                  )
+              if len(out) < len(img):
+                  out += b"\0" * (len(img) - len(out))
+
               open(dst, "wb").write(out)
               chk = open(dst, "rb").read()
               assert chk[:8] == b"ANDROID!" and u32(chk, 40) == hv and chk[page:page+len(kern)] == kern
@@ -330,6 +341,10 @@ jobs:
               out = bytes(hdr) + pad(kern, page)[:new_ram_off-page] + ramdisk + b"\0" * ((-len(ramdisk)) % page)
               # simpler rebuild
               out = bytes(hdr) + pad(kern, page) + pad(ramdisk, page)
+              if len(out) > len(img):
+                  sys.exit("boot repack trop grand: %d o (stock %d o)" % (len(out), len(img)))
+              if len(out) < len(img):
+                  out += b"\0" * (len(img) - len(out))
               open(dst, "wb").write(out)
 
               chk = open(dst, "rb").read()
