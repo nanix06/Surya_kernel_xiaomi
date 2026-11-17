@@ -272,11 +272,6 @@ jobs:
               second  = img[s_off:s_off + ss]
               rec     = img[rec_off:rec_off + dtbo_s] if hv >= 1 else b""
               dtb     = img[dtb_off:dtb_off + dtb_s] if hv >= 2 else b""
-              orig_end = max(k_off + align(ks), r_off + align(rs), s_off + align(ss),
-                             rec_off + align(dtbo_s) if hv >= 1 else 0,
-                             dtb_off + align(dtb_s) if hv >= 2 else 0)
-              tail = img[orig_end:]
-
               stock_kern = img[k_off:k_off + ks]
               kpath, kname = pick_kernel(stock_kern, "out")
               kern = open(kpath, "rb").read()
@@ -300,15 +295,18 @@ jobs:
                   struct.pack_into("<I", hdr, 1644, len(dtb))  # dtb_size
 
               new_ram_off = PAGE + align(len(kern))
-              out = bytes(hdr) + kern + b"\0" * (new_ram_off - PAGE - len(kern))
-              out += ramdisk + b"\0" * (align(len(ramdisk)) - len(ramdisk))
-              out += second  + b"\0" * (align(len(second)) - len(second))
+              body = bytes(hdr) + kern + b"\0" * (new_ram_off - PAGE - len(kern))
+              body += ramdisk + b"\0" * (align(len(ramdisk)) - len(ramdisk))
+              body += second  + b"\0" * (align(len(second)) - len(second))
               if hv >= 1:
-                  out += rec + b"\0" * (align(len(rec)) - len(rec))
+                  body += rec + b"\0" * (align(len(rec)) - len(rec))
               if hv >= 2:
-                  out += dtb + b"\0" * (align(len(dtb)) - len(dtb))
-              out += tail
-              open(dst, "wb").write(out)
+                  body += dtb + b"\0" * (align(len(dtb)) - len(dtb))
+
+              # Comme dans le workflow clang : on ecrit uniquement les sections
+              # utiles, sans la queue de padding du stock (128 Mo de zeros).
+              # L'image fait donc ~40 Mo et fastboot la flash sans "Volume Full".
+              open(dst, "wb").write(body)
 
               # relecture pour verifier que rien n'a bouge a part le noyau
               chk = open(dst, "rb").read()
